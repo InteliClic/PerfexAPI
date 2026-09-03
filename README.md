@@ -51,8 +51,12 @@ curl -s -X DELETE -H "X-Api-Token: $T" .../api/expenses/2844
 
 | | URL | Module |
 |---|---|---|
-| InteliClic S.A. | https://hq.inteliclic.com | 1.1.1 |
+| InteliClic S.A. | https://hq.inteliclic.com | 1.1.1 — expenses current to 2026-07-31; categories 1–15,17,18 (8 = Office Equipment / Supplies); payment modes 1 CrediCorp wire, 2 Payoneer, 3 PayPal; customer 115 Central Flow |
 | Aron Corp | https://hq.aroncorp.com | not yet installed |
+
+## Bringing an instance current
+
+See **RUNBOOK.md** — the generic, step-by-step procedure (install → learn the instance → gather statements → build ledger + review sheet → push → verify → record), written so a fresh Claude session can run it on any instance.
 
 ## `tools/` — statement → Perfex pipeline
 
