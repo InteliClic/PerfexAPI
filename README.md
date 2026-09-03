@@ -51,7 +51,7 @@ curl -s -X DELETE -H "X-Api-Token: $T" .../api/expenses/2844
 
 | | URL | Module |
 |---|---|---|
-| InteliClic S.A. | https://hq.inteliclic.com | 1.1.1 — expenses current to 2026-07-31; categories 1–15,17,18 (8 = Office Equipment / Supplies); payment modes 1 CrediCorp wire, 2 Payoneer, 3 PayPal; customer 115 Central Flow |
+| InteliClic S.A. | https://hq.inteliclic.com | 1.1.1 — expenses current to 2026-07-31 (Payoneer + Credicorp checking + Credicorp Visa ••••9365, all three sources in); categories 1–15,17,18 (8 = Office Equipment / Supplies); payment modes 1 CrediCorp wire, 2 Payoneer ACH, 3 PayPal; customer 115 Central Flow |
 | Aron Corp | https://hq.aroncorp.com | 1.1.1 — expenses current to 2026-07-31; Perfex 3.2.1 / PHP 8.3.33; base currency CAD (1 = CAD, 3 = USD); categories 1–10,12,13 (8 = Office Supplies, 12 = Equipment); payment modes 1 Scotia CAD 0711, 2 Scotia USD 2712, 3 Scotia Visa Momentum, 4 Financing, 5 Scotia CAD 0816, 6 Scotia CAD 9414, 7 Scotia CAD 9112, 8 Visa Infinite; customers 1 InteliClic S.A., 2 LogiCall Inc, 3 Central Flow |
 
 ## Bringing an instance current
@@ -63,6 +63,7 @@ See **RUNBOOK.md** — the generic, step-by-step procedure (install → learn th
 - `build_ledger.py` — reads a Payoneer transactions CSV and a Credicorp "Detalle de movimientos" XLS, keeps Jan–Jul 2026 outflows, drops transfers/revenue/cancelled lines, categorizes from `namemap_2025.txt` (merchant → category learned from the 2025 books) plus `rules2.py`/`rules3.py`, and writes `ledger_2026_h1.json`. Adjust the date window at the top.
 - `build_ledger_aroncorp.py` — the AronCorp equivalent: reads the six Scotiabank CSV exports (Visa Momentum, chequing 0816, USD chequing 2712, savings 0711/9414/9112), which all share one shape — card amounts positive for debits, bank-account amounts negative. Categorizes from a merchant map learned off the instance's own history, warns when a Scotia export hit its 100-row cap, and flags `ASK` rows. Edit the window, file names and `NEXT` counters at the top.
 - `push_expenses.js` — paste into the browser console on **Setup → API Layer** (reads the token from the page) to push a ledger JSON through `/expenses/batch` in chunks and print per-month totals. Used because Claude's cloud sandbox cannot reach the host directly; from a machine that can, `curl` works the same.
+- **Credicorp Visa (no parser yet)** — the card statement has no file export; Banca en Línea offers only a "visual" render. Read it off the page (`get_page_text` on the results view), one month per query. The cycle closes on the 20th and is auto-paid on the 14th of the next month, so a Jan–Jul window needs the Jan–**Aug** statements. Skip the `ABONO A SU CUENTA` credit lines — those are the card payments and are already booked from the checking statement. Fee lines have no `Referencia`; use `CCVISA-YYYYMMDD-<cents>`.
 
 ## Roadmap (add as needed)
 
