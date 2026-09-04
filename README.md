@@ -2,6 +2,8 @@
 
 A small, token-authenticated JSON API module for [Perfex CRM](https://www.perfexcrm.com/) (3.x), built so Claude (or any script) can keep the books current without anyone clicking through the Perfex UI. Installed on both instances — InteliClic and Aron Corp; grows as we need it.
 
+**These two Perfex instances are the books.** Every expense imported from a bank or card statement — for either company — goes into that company's instance and nowhere else. There is no second ledger, no spreadsheet of record, and no accountant-side system that expenses are entered into instead. The accountant works *from* these instances. If a statement line is not in Perfex, it is not in the books.
+
 ## Install / upgrade
 
 1. Zip the `perfex_crm_api_layer/` folder (folder name must be the zip's top level):  
@@ -51,8 +53,24 @@ curl -s -X DELETE -H "X-Api-Token: $T" .../api/expenses/2844
 
 | | URL | Module |
 |---|---|---|
-| InteliClic S.A. | https://hq.inteliclic.com | 1.1.1 — expenses current to 2026-07-31 (Payoneer + Credicorp checking + Credicorp Visa ••••9365, all three sources in); categories 1–15,17,18 (8 = Office Equipment / Supplies); payment modes 1 CrediCorp wire, 2 Payoneer ACH, 3 PayPal; customer 115 Central Flow |
-| Aron Corp | https://hq.aroncorp.com | 1.1.1 — expenses current to 2026-07-31; Perfex 3.2.1 / PHP 8.3.33; base currency CAD (1 = CAD, 3 = USD); categories 1–10,12,13 (8 = Office Supplies, 12 = Equipment); payment modes 1 Scotia CAD 0711, 2 Scotia USD 2712, 3 Scotia Visa Momentum, 4 Financing, 5 Scotia CAD 0816, 6 Scotia CAD 9414, 7 Scotia CAD 9112, 8 Visa Infinite; customers 1 InteliClic S.A., 2 LogiCall Inc, 3 Central Flow |
+| InteliClic S.A. | https://hq.inteliclic.com | 1.1.1 — expenses current to **2026-08-31** (Payoneer + Credicorp checking + Credicorp Visa ••••9365, all three sources in); categories 1–15, 17, 18, 19 (8 = Office Equipment / Supplies, 19 = Bank Interest Received); payment modes 1 CrediCorp wire, 2 Payoneer ACH, 3 PayPal; customer 115 Central Flow |
+| Aron Corp | https://hq.aroncorp.com | 1.1.1 — expenses current to **2026-08-31**; Perfex 3.2.1 / PHP 8.3.33; base currency CAD (1 = CAD, 3 = USD); categories 1–10, 12, 13, 14 (8 = Office Supplies, 12 = Equipment, 14 = Owner Advances); payment modes 1 Scotia CAD 0711, 2 Scotia USD 2712, 3 Scotia Visa Momentum, 4 Financing, 5 Scotia CAD 0816, 6 Scotia CAD 9414, 7 Scotia CAD 9112, 8 Visa Infinite; customers 1 InteliClic S.A., 2 LogiCall Inc, 3 Central Flow |
+
+### InteliClic — 2026-09-04 reconciliation corrections
+
+25 rows pushed (ids 3592–3616) to close the gap between the books and the bank, after an accountant's interim reconciliation could not be made to tie. Detail and the full working in `life-ops/docs/cash-positions.md`.
+
+| What | Rows | Net | Category | Reference shape |
+|---|---|---|---|---|
+| CrediCorp monthly interest credits, Jan–Aug | 8 | (263.62) | 19 Bank Interest Received | `CCINT-<YYYYMMDD>` |
+| Payoneer card refunds | 6 | (1,246.04) | original category of each purchase | Payoneer txn id |
+| LogiCall sending-bank wire commissions | 7 | 200.00 | 10 Bank Fees | `CCFEE-LGC-<YYYYMMDD>` |
+| Payoneer → CrediCorp receiving fees | 4 | 115.00 | 10 Bank Fees | `CCFEE-TRF-<YYYYMMDD>` |
+
+Two patterns worth carrying forward, because neither is visible in any statement:
+
+- **A wire arrives short.** The sending bank deducts its commission before the money lands, so the deposit is consistently 30.00 under the invoice. Nothing appears as a charge anywhere — the only evidence is invoice-minus-deposit. Book it, or invoices will never tie to cash.
+- **A transfer between own accounts loses money in transit.** 65,045.00 left Payoneer over four transfers and 64,885.00 arrived. Only the Payoneer-side fee is on a statement; the receiving-side deduction has to be derived the same way.
 
 ## Bringing an instance current
 
@@ -69,16 +87,19 @@ See **RUNBOOK.md** — the generic, step-by-step procedure (install → learn th
 
 - Expense categories / customers CRUD (created via the Perfex UI so far)
 - Attachments on expenses (receipt PDFs)
-- Reports endpoints (P&L by category/month, expenses by client) for the accountant hand-off
+- **Reports** — tracked as life-ops **#103** (period report with as-at-date accuracy: invoice status computed from payment dates, not the stored status field) and **#104** (single P&L with clear totals). Both belong in this module as admin views. Same-origin only.
 - Weekly Payoneer/Credicorp/Scotia pull → batch push (scheduled task; bank logins still need a browser session)
 
 ## Notes / gotchas
 
+- **Negative amounts are accepted** and stored as given (verified 2026-09-04). This is how refunds and non-invoice income are represented: a card refund goes in as a negative expense in the *original* purchase's category, so category totals stay honest. Bank interest is income, but Perfex has no concept of income that is not an invoice — recording it as an invoice would corrupt the revenue figure, so it goes in as a negative expense in its own category, to be reclassified to *otros ingresos* in the statements.
 - `Expenses_model` treats the presence of the `billable` key as true; the API only sends it when set.
 - Loading module views via `module_views_path()` failed on 3.4.1; the admin page renders inline with `init_head()/init_tail()`.
 - Keep the module's init file non-empty — Perfex rejects the zip ("No valid module is found") if the header block is missing.
 - Token was shown in a tool transcript once on 2026-09-02 — regenerate from the admin page when convenient. (AronCorp's token has not been exposed.)
 - **`reference_no` is the dedupe key, and its shape differs per instance.** InteliClic uses the bank's own transaction id; AronCorp uses `<SourceTag>-<YYYY-MM-DD>-<nnnn>` with a per-source counter that restarts each calendar year. Read the current max off the instance before generating new ones.
+- Some older InteliClic CrediCorp rows share a `reference_no` across several expenses (e.g. `CC-42085873-0112` on seven rows). Harmless, but it weakens the dedupe key — do not assume `reference_no` is unique when reasoning about existing data.
+- Not every bank line has a usable reference. CrediCorp stamps `999999` on every interest credit, so a synthetic reference is needed or the eight credits collide with each other.
 - `GET /expenses` caps at 500 rows per call regardless of a larger `limit` — page with `offset` or you will silently read a truncated history and conclude the books stop earlier than they do.
 - Scotiabank's web export caps at 100 rows with no warning. A file with exactly 100 data rows is truncated; re-pull it month by month.
 - Scotia exports a card's full history under its **current** number, so a file named for the new card contains the old card's transactions. Dedupe on (date, description, amount) when combining exports.
