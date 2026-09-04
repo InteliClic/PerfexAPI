@@ -1,0 +1,103 @@
+air canada|2
+amazon|8
+artigiano caffe|7
+astral grow|8
+bambu lab|12
+store bambulab|12
+bc ferries|2
+bc registry services|5
+best buy|8
+black + blue|7
+browns|7
+buffer plan|13
+coastal reign printing|13
+cobblestone pub|7
+crowne plaza|2
+digi-key|8
+dos amigos hospitality|7
+drumroaster coffee|7
+empire cpa|5
+evo car share|1
+fairmont empress|2
+fairmont pacific rim|2
+fairmont|2
+giovane caffe|7
+github|5
+google ads|13
+google one|5
+google workspace|5
+government tax payment|10
+hard bean brunch waterfront|7
+helijet|2
+heritage seeds|8
+higgsfield|5
+honk parking|1
+innoquad|5
+interac e-transfer fee|4
+jlcpcb|8
+koodo mobile|5
+ls olde school coffee|7
+marilena cafe + raw bar|7
+mill bay auto spa|1
+noodlebox|7
+original joe's duncan|7
+oshi nori|7
+parkland|1
+parkvictoria|1
+paypro global|5
+peninsula co-op|1
+pocket|5
+prime video|5
+r parking|1
+r parking pbp|1
+rbc vehicle loan payment|1
+red robin|7
+rexall|8
+scoop & waffle|7
+scotiabank - service charge|4
+scotiabank usd - service charge|4
+shell|1
+skinny louie wynwood|7
+skip the dishes|7
+skipthedishes|7
+small victory bakery|7
+social corner|7
+staples|8
+sushi california|7
+sushi house|7
+the home depot|8
+tropic ocean airways|2
+uber|2
+ups|3
+vevor|8
+visa interest charges|4
+windsurf|5
+anthropic|5
+openai|5
+meshy|5
+cloudflare|5
+canadian tire|8
+princess auto|8
+lee valley|8
+home hardware|8
+rona|8
+walmart|8
+costco|8
+save on foods|7
+thrifty foods|7
+country grocer|7
+quality foods|7
+starbucks|7
+tim hortons|7
+a&w|7
+mcdonald|7
+subway|7
+amzn mktp ca|8
+amazon.ca|8
+bcf |2
+bcf|2
+koodo airtime|5
+cpc / scp|3
+epic markets|7
+google workspace aronc|5
+staples.ca|8
