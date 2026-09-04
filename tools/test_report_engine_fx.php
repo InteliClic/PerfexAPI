@@ -105,4 +105,4 @@ $flagged = 0; foreach ($rep2['warnings'] as $w) { if (strpos($w,'exchange rate')
 check('Warning raised rather than a silent wrong total', $flagged, 1);
 check('USD revenue marked incomplete, not guessed',
       byCode($rep2['revenue']['by_currency'],'USD')['converted_complete'] ? 1 : 0, 0);
-echo "\n".($fails?"*** $fails FAILED ***":"*** ALL CHECKS PASSED ***"))."\n";
+echo "\n".($fails?"*** $fails FAILED ***":"*** ALL CHECKS PASSED ***")."\n";
