@@ -34,6 +34,12 @@ Base: `https://<host>/perfex_crm_api_layer/api`
 | PUT | `/invoices` | `{clientid, date, duedate?, currency, number?, newitems:[{description, long_description?, qty, rate, taxname?:[]}], status?, adminnote?, clientnote?}` |
 | GET | `/payments?from=&to=` | `invoicepaymentrecords` |
 | PUT | `/payments` | `{invoiceid, amount, date, paymentmode, transactionid?, note?, send_email?}`; 409 on duplicate `transactionid` |
+| GET | `/report?from=&to=&basis=accrual\|cash&present_currency=` | the whole packet as JSON — see *Reports* below |
+| GET/PUT | `/report_config` | `{other_income_categories:[ids]}` — expense categories that are really income |
+| GET/PUT/DELETE | `/bank_balances` | `{date, account, currency, amount, note}`; upserts on (date, account) |
+| GET/PUT/DELETE | `/adjustments` | `{date, label, amount, currency, note}`; upserts on (date, label) |
+| GET/PUT | `/fx_rates` | `{date, base, quote, rate, source}`; upserts on (date, base, quote) |
+| GET | `/fx_rates/needed?from=&to=&present_currency=` | **only** the dates in the period that actually need a rate |
 
 Conventions: dates `YYYY-MM-DD` in and out; amounts as numbers; JSON bodies; JSON responses. **Writes use PUT/PATCH/DELETE, never POST** — Perfex's CSRF filter intercepts POST; the other verbs pass. All writes go through Perfex's own models (`expenses_model`, `invoices_model`, `payments_model->process_payment`) so numbering, invoice status and the activity log stay coherent. No raw SQL writes.
 
@@ -53,8 +59,8 @@ curl -s -X DELETE -H "X-Api-Token: $T" .../api/expenses/2844
 
 | | URL | Module |
 |---|---|---|
-| InteliClic S.A. | https://hq.inteliclic.com | 1.1.1 — expenses current to **2026-08-31** (Payoneer + Credicorp checking + Credicorp Visa ••••9365, all three sources in); categories 1–15, 17, 18, 19 (8 = Office Equipment / Supplies, 19 = Bank Interest Received); payment modes 1 CrediCorp wire, 2 Payoneer ACH, 3 PayPal; customer 115 Central Flow |
-| Aron Corp | https://hq.aroncorp.com | 1.1.1 — expenses current to **2026-08-31**; Perfex 3.2.1 / PHP 8.3.33; base currency CAD (1 = CAD, 3 = USD); categories 1–10, 12, 13, 14 (8 = Office Supplies, 12 = Equipment, 14 = Owner Advances); payment modes 1 Scotia CAD 0711, 2 Scotia USD 2712, 3 Scotia Visa Momentum, 4 Financing, 5 Scotia CAD 0816, 6 Scotia CAD 9414, 7 Scotia CAD 9112, 8 Visa Infinite; customers 1 InteliClic S.A., 2 LogiCall Inc, 3 Central Flow |
+| InteliClic S.A. | https://hq.inteliclic.com | **1.2.0** — expenses current to **2026-08-31** (Payoneer + Credicorp checking + Credicorp Visa ••••9365, all three sources in); categories 1–15, 17, 18, 19 (8 = Office Equipment / Supplies, 19 = Bank Interest Received); payment modes 1 CrediCorp wire, 2 Payoneer ACH, 3 PayPal; customer 115 Central Flow; currencies 1 USD (base), 2 EUR; **report: other-income category 19; bank balances + adjustments loaded for 2025-12-31, 2026-07-31, 2026-08-31** |
+| Aron Corp | https://hq.aroncorp.com | **1.2.0** — expenses current to **2026-08-31**; Perfex 3.2.1 / PHP 8.3.33; base currency CAD (1 = CAD, 3 = USD); categories 1–10, 12, 13, 14 (8 = Office Supplies, 12 = Equipment, 14 = Owner Advances); payment modes 1 Scotia CAD 0711, 2 Scotia USD 2712, 3 Scotia Visa Momentum, 4 Financing, 5 Scotia CAD 0816, 6 Scotia CAD 9414, 7 Scotia CAD 9112, 8 Visa Infinite; customers 1 InteliClic S.A., 2 LogiCall Inc, 3 Central Flow; **report: 14 USD/CAD rates loaded for Jan–Aug 2026; bank balances not yet entered, so the reconciliation block is incomplete by design** |
 
 ### InteliClic — 2026-09-04 reconciliation corrections
 
@@ -83,11 +89,80 @@ See **RUNBOOK.md** — the generic, step-by-step procedure (install → learn th
 - `push_expenses.js` — paste into the browser console on **Setup → API Layer** (reads the token from the page) to push a ledger JSON through `/expenses/batch` in chunks and print per-month totals. Used because Claude's cloud sandbox cannot reach the host directly; from a machine that can, `curl` works the same.
 - **Credicorp Visa (no parser yet)** — the card statement has no file export; Banca en Línea offers only a "visual" render. Read it off the page (`get_page_text` on the results view), one month per query. The cycle closes on the 20th and is auto-paid on the 14th of the next month, so a Jan–Jul window needs the Jan–**Aug** statements. Skip the `ABONO A SU CUENTA` credit lines — those are the card payments and are already booked from the checking statement. Fee lines have no `Referencia`; use `CCVISA-YYYYMMDD-<cents>`.
 
+## Reports — the Annual Accountant Packet
+
+`/admin/perfex_crm_api_layer/reports` (Reports → Accountant Packet, also under Setup). Session-authenticated;
+no API token is embedded in the page. Closes life-ops **#103** and **#104** as one document rather than two screens.
+
+**The rule the whole thing exists to enforce:** for a period ending on date `Y`, every derived figure is computed
+from dates. `tblinvoices.status` is never read except to exclude drafts and cancellations, because it reflects the
+world *today*. An invoice is outstanding at `Y` if `date <= Y` and payments applied on or before `Y` fall short.
+Payments count by payment date, even against earlier invoices. Expenses count on the date incurred. Nothing dated
+after `Y` influences anything.
+
+The canonical proof of this, live on InteliClic: **INV-003297** (LogiCall, 16,421.00, dated 2026-07-01, paid
+2026-08-04) reads *Paid / 0.00* in every Perfex screen. The packet reports it **Unpaid, 16,421.00 open** as at
+2026-07-31 and flags that its stored status differs. That single invoice is the difference between receivables of
+18,750 and 35,171 — and the reason a settled question looked like missing money.
+
+Sections: cover (period, basis, currency) · P&L with per-category subtotals, % of revenue and an optional prior-year
+comparative · other income · revenue by customer · collections · cash reconciliation · AR aging as at `Y` · invoice
+table with paid/open/status **as at Y** beside status today · excluded (draft/cancelled) · exchange rates applied.
+
+**Exports.** Print/PDF via a print stylesheet, and Excel as SpreadsheetML 2003 — a plain XML string built in PHP with
+no library, deliberately, so it works identically on InteliClic (Ubuntu 14.04, old PHP) and AronCorp (PHP 8.3.33)
+without depending on whatever spreadsheet library a given Perfex build ships. Verified to open in LibreOffice with
+all sheets intact and numbers stored as numbers.
+
+### The three modelling decisions
+
+- **Non-invoice income** (Nick, 2026-09-04). Perfex has no concept of income that is not an invoice, so bank interest
+  is booked as a negative expense in its own category. Rather than change that, the report carries a per-category
+  flag: flagged categories are lifted out of expenses and presented, sign-flipped, as *other income*. The books are
+  not modified and there is no second ledger. Refunds booked back to their original category stay as contra-expense,
+  which is correct. Set on InteliClic: category **19 Bank Interest Received**.
+  The P&L and the reconciliation therefore state expenses differently *on purpose* — P&L expenses **minus** other
+  income equals the reconciliation's *gastos*. The packet prints that tie so nobody has to rediscover it.
+- **Currency** (Nick, 2026-09-04). Currencies are never mixed. Each section stacks per-currency subtotals — base
+  currency first, then alphabetically — and converts at the rate **on the transaction date**: for a collection, the
+  day the money was received, which is the treatment Canadian reporting wants. Rates are stored **sparsely**, pinned
+  to real transaction dates: *"I don't think you wanna bring in a whole list of everything. That's 365 records, and we
+  only get twelve payments a year if that."* `GET /fx_rates/needed` returns exactly which dates need one — 14 rows
+  covered AronCorp's whole Jan–Aug 2026. Where the market was closed the most recent prior published rate is used and
+  the packet shows both dates. A missing rate is **flagged, never guessed**: the total is marked incomplete.
+- **Adjustments are point-in-time, not accumulating.** Rows are applied only if dated exactly on the period end date,
+  because "Visa charges outstanding" and "opening-balance rounding" state a position, not an amount that accrues.
+  Rows inside the period but not on the end date are reported as *not applied* rather than silently added — otherwise
+  entering the August position would double-count into a Jan–Aug run and tie to nothing.
+
+### Module-owned tables
+
+`tblpapi_bank_balances`, `tblpapi_adjustments`, `tblpapi_fx_rates`. Created by `Report_engine::migrate()`, which runs
+on **every construct**, not just on activation — upgrading a module in place does not re-fire the activation hook, so
+a table added in a later version would otherwise never exist on an upgraded instance.
+
+### Validation
+
+Reproduced the known-good Jan–Jul 2026 InteliClic period from Perfex alone, to the cent:
+
+| | Target | Report |
+|---|---|---|
+| Facturación | 246,277.50 | 246,277.50 |
+| Cuentas pendientes de cobro | 35,171.00 | 35,171.00 |
+| Gastos | 193,520.55 | 193,520.55 |
+| Saldo según operación | 173,276.95 | 173,276.95 |
+| Saldo ajustado / real | 173,673.09 | 173,673.09 |
+| **Diferencia** | **0.00** | **0.00** |
+
+Plus, from live data: collections 211,106.50, collections against pre-period invoices 0.00 (which is *why* the
+hand-built sheet's formula was valid — it is now a printed line rather than an assumption), net 52,756.95.
+
 ## Roadmap (add as needed)
 
 - Expense categories / customers CRUD (created via the Perfex UI so far)
 - Attachments on expenses (receipt PDFs)
-- **Reports** — tracked as life-ops **#103** (period report with as-at-date accuracy: invoice status computed from payment dates, not the stored status field) and **#104** (single P&L with clear totals). Both belong in this module as admin views. Same-origin only.
+- Bilingual (ES/EN) packet labels for Abel — currently English, with Spanish in the adjustment notes
+- AronCorp bank balances and adjustments, so its reconciliation block completes (life-ops #107)
 - Weekly Payoneer/Credicorp/Scotia pull → batch push (scheduled task; bank logins still need a browser session)
 
 ## Notes / gotchas
@@ -104,3 +179,6 @@ See **RUNBOOK.md** — the generic, step-by-step procedure (install → learn th
 - Scotiabank's web export caps at 100 rows with no warning. A file with exactly 100 data rows is truncated; re-pull it month by month.
 - Scotia exports a card's full history under its **current** number, so a file named for the new card contains the old card's transactions. Dedupe on (date, description, amount) when combining exports.
 - Interac e-transfers carry no recipient in the CSV — only "Interac E-Transfer". The payee is in the confirmation email: `from:catch@payments.interac.ca` around the date.
+- **Chrome's `file_upload` will not take a path from a connected device folder.** It only accepts files under the session's own uploads/outputs. The working sequence for a module zip is: build → `device_commit_files` into Downloads → `device_stage_files` back → upload the returned `/mnt/user-data/uploads/...` path.
+- **The Install button needs a real coordinate click.** Clicking it by element ref attaches the file but does not submit the form; the page sits there looking correct with the filename shown and nothing installed. Click the button's coordinates, then confirm the version actually changed before assuming the upgrade landed.
+- Leaving a file in the upload input arms a "Leave site?" dialog that blocks the next navigation — open a second tab rather than forcing it.

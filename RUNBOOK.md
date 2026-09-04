@@ -7,13 +7,15 @@ Everything below is driven through **Claude in Chrome** (the user's logged-in Pe
 ## 0. Preconditions
 
 - The user is logged in to the Perfex admin in Chrome (Claude in Chrome extension connected). If the tab lands on the login screen with saved credentials filled in, **ask the user to click Login** — Claude does not authenticate on their behalf.
-- Claude has the module zip: build it from this repo with `zip -rX perfex_crm_api_layer.zip perfex_crm_api_layer` (the zip's top-level folder must be `perfex_crm_api_layer/`, and `perfex_crm_api_layer.php` must be non-empty or Perfex answers "No valid module is found"). Write the zip somewhere `file_upload` accepts — the session's outputs folder or a connected folder.
+- Claude has the module zip: build it from this repo with `zip -rX perfex_crm_api_layer.zip perfex_crm_api_layer` (the zip's top-level folder must be `perfex_crm_api_layer/`, and `perfex_crm_api_layer.php` must be non-empty or Perfex answers "No valid module is found").
+- **Getting the zip somewhere `file_upload` will accept it.** It rejects both a sandbox path and a path in a connected device folder — it only takes files under the session's own uploads. The sequence that works: `device_commit_files` the zip into Downloads, then `device_stage_files` it straight back, then upload the `/mnt/user-data/uploads/Downloads/...` path the stage call returns.
 - Known instances and their state live in `README.md` → *Instances* (and in life-ops `docs/accounting.md`).
 
 ## 1. Install / upgrade the module (5 minutes)
 
 1. Navigate to `<instance>/admin/modules`.
-2. `find` the "Upload Module" file input and the **Install** button; `file_upload` the zip to the input; click Install. (Do it as *one* navigation → upload → click; re-submitting the form on a stale page returns "Page expired" and silently does nothing.)
+2. `find` the "Upload Module" file input; `file_upload` the zip to it; then click **Install by coordinate**, not by element ref. (Do it as *one* navigation → upload → click; re-submitting on a stale page returns "Page expired" and silently does nothing.)
+   **Clicking Install by `ref` does not submit the form.** The page afterwards looks exactly right — filename in the input, no error — and nothing has installed. Screenshot, click the button's actual coordinates, then *verify the version string changed* before believing it. Note also that a file left in the input arms a "Leave site?" dialog which blocks the next navigation; open a second tab instead of forcing past it.
 3. On the module list, click **Activate** on "Perfex CRM API Layer" (first install only; upgrades stay active). Confirm the version string in the list matches the zip.
 4. Open `<instance>/admin/perfex_crm_api_layer/admin` (Setup → API Layer). It shows the base URL, the token, the endpoint list, and the staff id used as `addedfrom`. Set the staff id to the owner's staff account if it isn't 1.
 5. Smoke test from that page:
@@ -94,7 +96,42 @@ Verify — and verify against the *source*, not only against your own ledger, or
 
 Corrections: `PATCH /expenses/<id>`; removals: `DELETE /expenses/<id>` (refuses invoiced expenses).
 
-## 6. Record
+## 6. Set up the Accountant Packet (once per instance)
+
+The report (`Reports → Accountant Packet`) needs three things per instance before its reconciliation block completes.
+Everything is entered under its **Setup** button and stored in the module, so the packet is self-contained and
+reproducible years later. Full background in `README.md` → *Reports*.
+
+1. **Other-income categories.** Tick any expense category that is really income booked as a negative expense
+   (InteliClic: *19 Bank Interest Received*). The report lifts those out of expenses and presents them as income
+   without touching the books.
+2. **Bank balances.** One row per account per close, including the day before the period starts — that is the
+   opening balance. Put the *source* of each figure in the note (which export, which running-balance column), because
+   that is the first thing anyone re-deriving it will ask.
+3. **Adjustments.** Documented lines between "balance per operations" and the actual bank balance — the Visa timing
+   difference and any audited-opening rounding. **Date them exactly on the period end date**; rows dated inside the
+   period but not at its end are deliberately not applied, and the report says so.
+
+Then, if the instance has foreign-currency transactions: run the period, open Setup and click **"Which dates need a
+rate?"**. It lists only the dates that actually carry a foreign-currency transaction — 14 rows covered AronCorp's
+whole Jan–Aug 2026, not 365. Fetch those from the Bank of Canada Valet series `FXUSDCAD` and save them. The cloud
+sandbox's egress does not allow `bankofcanada.ca`, so fetch it from the browser instead:
+
+```js
+const j = await (await fetch('https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json'
+  + '?start_date=2025-12-15&end_date=2026-09-04')).json();
+// map o.d -> o.FXUSDCAD.v, then for each needed date use that day's rate, or walk
+// back to the most recent published one when the market was closed (weekend, holiday).
+```
+
+Store the market-closed cases under the *published* date, not the transaction date — the engine already resolves
+"most recent rate at or before the transaction date" and shows both dates in the packet.
+
+**Verify against a known-good period.** On InteliClic that is Jan 1 – Jul 31 2026, which must reproduce facturación
+246,277.50, receivables 35,171.00, gastos 193,520.55 and tie to cash of 173,673.09 with difference 0.00. If it does
+not tie, the balances or adjustments are wrong before the engine is.
+
+## 7. Record
 
 - `README.md` → *Instances*: version, categories, payment modes, "expenses current to".
 - life-ops `docs/accounting.md`: what was pushed, totals, decisions, what's still missing.
