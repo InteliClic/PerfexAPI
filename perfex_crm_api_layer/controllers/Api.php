@@ -178,6 +178,11 @@ class Api extends App_Controller
                 return $this->expenses();
             case 'invoices':           return $this->invoices($sub);
             case 'payments':           return $this->payments();
+            case 'report':             return $this->report();
+            case 'report_config':      return $this->reportConfig();
+            case 'bank_balances':      return $this->bankBalances($sub);
+            case 'adjustments':        return $this->adjustments($sub);
+            case 'fx_rates':           return $this->fxRates($sub);
             default:
                 $this->out(array('error' => 'unknown_resource', 'resource' => $resource), 404);
         }
@@ -444,6 +449,207 @@ class Api extends App_Controller
             $this->out(array('error' => 'insert_failed', 'db' => $this->db->error()), 500);
         }
         $this->out(array('ok' => true, 'id' => (int) $id), 201);
+    }
+
+    // --- reports (life-ops #103 / #104)
+
+    private function engine()
+    {
+        require_once __DIR__ . '/../libraries/Report_engine.php';
+        return new Report_engine($this);
+    }
+
+    /** GET /report?from=&to=&basis=accrual|cash&present_currency=<id> */
+    private function report()
+    {
+        $from = $this->input->get('from');
+        $to   = $this->input->get('to');
+        if (!$from || !$to) {
+            $this->out(array('error' => 'missing_fields', 'fields' => array('from', 'to')), 400);
+        }
+        foreach (array($from, $to) as $d) {
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) {
+                $this->out(array('error' => 'bad_date', 'value' => $d, 'hint' => 'YYYY-MM-DD'), 400);
+            }
+        }
+        if ($to < $from) {
+            $this->out(array('error' => 'bad_range', 'hint' => 'to must not precede from'), 400);
+        }
+        $e = $this->engine();
+        $this->out($e->build(array(
+            'from'             => $from,
+            'to'               => $to,
+            'basis'            => $this->input->get('basis'),
+            'present_currency' => (int) $this->input->get('present_currency'),
+        )));
+    }
+
+    /** GET|PUT /report_config — which expense categories are really income. */
+    private function reportConfig()
+    {
+        if ($this->method() === 'GET') {
+            $e = $this->engine();
+            $this->out(array(
+                'ok' => true,
+                'other_income_categories' => $e->otherIncomeCategories(),
+                'note' => 'Rows in these categories are booked as negative expenses and presented as income. The books are not modified.',
+            ));
+        }
+        $this->requireWrite();
+        $in = $this->body();
+        if (!isset($in['other_income_categories']) || !is_array($in['other_income_categories'])) {
+            $this->out(array('error' => 'missing_fields', 'fields' => array('other_income_categories[]')), 400);
+        }
+        $ids = array();
+        foreach ($in['other_income_categories'] as $v) {
+            if ((int) $v > 0) { $ids[] = (int) $v; }
+        }
+        $ids = array_values(array_unique($ids));
+        update_option('perfex_crm_api_layer_other_income_categories', implode(',', $ids));
+        $this->out(array('ok' => true, 'other_income_categories' => $ids));
+    }
+
+    /** GET|PUT /bank_balances, DELETE /bank_balances/<id>. Upsert on (date, account). */
+    private function bankBalances($sub)
+    {
+        $this->engine(); // ensures the tables exist
+        $t = db_prefix() . 'papi_bank_balances';
+        $m = $this->method();
+
+        if ($m === 'DELETE' && ctype_digit((string) $sub)) {
+            $this->db->where('id', (int) $sub)->delete($t);
+            $this->out(array('ok' => true, 'deleted' => (int) $sub));
+        }
+        if ($m === 'GET') {
+            $this->dateRange($q, 'date');
+            $this->db->order_by('date', 'desc');
+            $this->db->order_by('account', 'asc');
+            $this->out(array('data' => $this->db->get($t)->result_array()));
+        }
+        $this->requireWrite();
+        $in    = $this->body();
+        $items = isset($in['items']) && is_array($in['items']) ? $in['items'] : array($in);
+        $ids   = array();
+        foreach ($items as $it) {
+            $this->need($it, array('date', 'account', 'amount'));
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $it['date'])) {
+                $this->out(array('error' => 'bad_date', 'value' => $it['date']), 400);
+            }
+            $row = array(
+                'date'     => $it['date'],
+                'account'  => $it['account'],
+                'currency' => isset($it['currency']) ? (int) $it['currency'] : 0,
+                'amount'   => (float) $it['amount'],
+                'note'     => isset($it['note']) ? $it['note'] : '',
+            );
+            $ex = $this->db->where('date', $row['date'])->where('account', $row['account'])->get($t)->row();
+            if ($ex) {
+                $this->db->where('id', $ex->id)->update($t, $row);
+                $ids[] = (int) $ex->id;
+            } else {
+                $this->db->insert($t, $row);
+                $ids[] = (int) $this->db->insert_id();
+            }
+        }
+        $this->out(array('ok' => true, 'ids' => $ids), 201);
+    }
+
+    /** GET|PUT /adjustments, DELETE /adjustments/<id>. */
+    private function adjustments($sub)
+    {
+        $this->engine();
+        $t = db_prefix() . 'papi_adjustments';
+        $m = $this->method();
+
+        if ($m === 'DELETE' && ctype_digit((string) $sub)) {
+            $this->db->where('id', (int) $sub)->delete($t);
+            $this->out(array('ok' => true, 'deleted' => (int) $sub));
+        }
+        if ($m === 'GET') {
+            $this->dateRange($q, 'date');
+            $this->db->order_by('date', 'asc');
+            $this->out(array('data' => $this->db->get($t)->result_array()));
+        }
+        $this->requireWrite();
+        $in    = $this->body();
+        $items = isset($in['items']) && is_array($in['items']) ? $in['items'] : array($in);
+        $ids   = array();
+        foreach ($items as $it) {
+            $this->need($it, array('date', 'label', 'amount'));
+            $row = array(
+                'date'     => $it['date'],
+                'label'    => $it['label'],
+                'amount'   => (float) $it['amount'],
+                'currency' => isset($it['currency']) ? (int) $it['currency'] : 0,
+                'note'     => isset($it['note']) ? $it['note'] : '',
+            );
+            $ex = $this->db->where('date', $row['date'])->where('label', $row['label'])->get($t)->row();
+            if ($ex) {
+                $this->db->where('id', $ex->id)->update($t, $row);
+                $ids[] = (int) $ex->id;
+            } else {
+                $this->db->insert($t, $row);
+                $ids[] = (int) $this->db->insert_id();
+            }
+        }
+        $this->out(array('ok' => true, 'ids' => $ids), 201);
+    }
+
+    /**
+     * GET  /fx_rates?from=&to=
+     * GET  /fx_rates/needed?from=&to=&present_currency=  -> only the dates that need a rate
+     * PUT  /fx_rates {items:[{date, base, quote, rate, source}]}
+     */
+    private function fxRates($sub)
+    {
+        $e = $this->engine();
+        $t = db_prefix() . 'papi_fx_rates';
+
+        if ($sub === 'needed') {
+            $from = $this->input->get('from');
+            $to   = $this->input->get('to');
+            if (!$from || !$to) {
+                $this->out(array('error' => 'missing_fields', 'fields' => array('from', 'to')), 400);
+            }
+            $pc = (int) $this->input->get('present_currency');
+            if ($pc < 1) {
+                $cur = $e->currencies();
+                foreach ($cur as $id => $c) { if ((int) $c['isdefault'] === 1) { $pc = $id; } }
+            }
+            $need = $e->fxNeeded($from, $to, $pc);
+            $missing = array();
+            foreach ($need as $n) { if (!$n['has_exact']) { $missing[] = $n; } }
+            $this->out(array('ok' => true, 'data' => $need, 'missing_exact' => $missing,
+                'count' => count($need), 'missing_count' => count($missing)));
+        }
+
+        if ($this->method() === 'GET') {
+            $this->dateRange($q, 'date');
+            $this->db->order_by('date', 'asc');
+            $this->paging();
+            $this->out(array('data' => $this->db->get($t)->result_array()));
+        }
+        $this->requireWrite();
+        $in    = $this->body();
+        $items = isset($in['items']) && is_array($in['items']) ? $in['items'] : array($in);
+        $n = 0; $skipped = 0;
+        foreach ($items as $it) {
+            $this->need($it, array('date', 'base', 'quote', 'rate'));
+            $row = array(
+                'date'   => $it['date'],
+                'base'   => strtoupper($it['base']),
+                'quote'  => strtoupper($it['quote']),
+                'rate'   => (float) $it['rate'],
+                'source' => isset($it['source']) ? $it['source'] : '',
+            );
+            if ($row['rate'] <= 0) { $skipped++; continue; }
+            $ex = $this->db->where('date', $row['date'])->where('base', $row['base'])
+                ->where('quote', $row['quote'])->get($t)->row();
+            if ($ex) { $this->db->where('id', $ex->id)->update($t, $row); }
+            else { $this->db->insert($t, $row); }
+            $n++;
+        }
+        $this->out(array('ok' => true, 'stored' => $n, 'skipped' => $skipped), 201);
     }
 
     // --- payments
